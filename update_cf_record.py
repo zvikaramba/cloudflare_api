@@ -7,9 +7,8 @@ import requests
 sys.path.insert(0, os.path.abspath('..'))
 import CloudFlare as CF
 
-
-email = ""
-token=""
+email="<cf_email>"
+token="<cf_token>"
 EXIT_SUCCESS=0
 EXIT_FAILURE=1
 NAME_TYPES=set(['AAAA', 'A', 'CNAME'])
@@ -39,13 +38,45 @@ def my_ip_address() -> tuple[str,str]:
 
     return ip_address, ip_address_type
 
+def get_zones(cf: CF.CloudFlare, zone_name: str = None) -> list:
+    # grab the zone identifier
+    try:
+        params = dict()
+        if zone_name:
+            params['name'] = zone_name
+
+        zones = cf.zones.get(params=params)
+    except CF.exceptions.CloudFlareAPIError as e:
+        exit('/zones %d %s - api call failed' % (e, e))
+    except Exception as e:
+        exit('/zones.get - %s - api call failed' % (e))
+
+    return zones
+
+def get_zone_id(cf: CF.CloudFlare, zone_name) -> str:
+    '''
+    '''
+    zones = get_zones(cf, zone_name)
+    if len(zones) == 0:
+        print('/zones.get - {} - zone not found'.format((zone_name)))
+        return ''
+    elif len(zones) != 1:
+        print('/zones.get - {} - api call returned {} items'.format(zone_name, len(zones)))
+        return ''
+
+    return zones[0]['id']
+
 def delete_dns_record(cf: CF.CloudFlare, \
-    zone_id: str, dns_name: str, record_type: str) -> bool:
+    zone_id: str, dns_name: str, record_type: str, extra_params: dict = {}) -> bool:
     ''' Delete a dns record and return True if successful
     '''
 
     try:
-        dns_records = cf.zones.dns_records.get(zone_id, params= {'name': dns_name, 'type': record_type})
+        params = dict(extra_params)
+        params['name'] = dns_name
+        params['type'] = record_type
+
+        dns_records = cf.zones.dns_records.get(zone_id, params = params)
     except CF.exceptions.CloudFlareAPIError as e:
         print('/zones/dns_records %s - %d %s - api call failed' % (dns_name, e, e))
         return False
@@ -63,24 +94,38 @@ def delete_dns_record(cf: CF.CloudFlare, \
     return ret
 
 def dns_update(cf: CF.CloudFlare, \
-    zone_id: str, dns_name: str, content: str, record_type: str, force: bool = False) -> bool:
+    zone_id: str, dns_name: str, content: str, record_type: str, \
+        force: bool = False, extra_params: dict = {}) -> bool:
     ''' Update/create a dns record and return True if successful
     '''
 
     try:
-        dns_records = cf.zones.dns_records.get(zone_id, params= {'name': dns_name})
+        params = dict(extra_params)
+        params['name'] = dns_name
+
+        dns_records = cf.zones.dns_records.get(zone_id, params = params)
     except CF.exceptions.CloudFlareAPIError as e:
         print('/zones/dns_records %s - %d %s - api call failed' % (dns_name, e, e))
         return False
 
     updated = False
+    print('Params to set: {}'.format(params))
 
     # update the record - unless it's already correct
     for dns_record in dns_records:
         patch = False
         try:
             if record_type == dns_record['type']:
-                if content == dns_record['content']:
+                print('Found record: {}\n'.format(dns_record))
+
+                for key in extra_params.keys():
+                    if dns_record[key] != extra_params[key]:
+                        print('\tNeed to update {} from {} -> {}'\
+                                .format(key, dns_record[key], extra_params[key]))
+                        patch = True
+                        break
+
+                if patch == False and content == dns_record['content']:
                     print('UNCHANGED: {} {}'.format(dns_name, content))
                     return True
             elif record_type in NAME_TYPES and dns_record['type'] in NAME_TYPES:
@@ -102,6 +147,8 @@ def dns_update(cf: CF.CloudFlare, \
                 'content': content,
                 'proxied': dns_record['proxied']
             }
+
+            new_record.update(extra_params)
 
             if patch:
                 print('PATCH: {} ; Changing record type/content to {}/{}'.format(dns_name, record_type, content))
@@ -126,6 +173,8 @@ def dns_update(cf: CF.CloudFlare, \
         'content':content
     }
 
+    new_record.update(extra_params)
+
     try:
         dns_record = cf.zones.dns_records.post(zone_id, data=new_record)
     except CF.exceptions.CloudFlareAPIError as e:
@@ -138,6 +187,8 @@ def dns_update(cf: CF.CloudFlare, \
 def usage():
     text="""usage: {0} ddns [fqdn-hostname] [-f]
        {0} set [fqdn-hostname] [type] [content] [-f]
+       {0} set-mx [fqdn-hostname] [fqfn-mail-hostname] [priority] [-f]
+       {0} get-zone-id [zone-name]
        {0} delete [fqdn-hostname] [type]""".format(sys.argv[0])
 
     print(text)
@@ -152,10 +203,27 @@ def main():
     zone_name = '.'.join(dns_name.split('.')[-2:])
     force = False
 
+    cf = CF.CloudFlare(email=email, token=token)
+
+    # get zones
+    zone_id = get_zone_id(cf, zone_name)
+    if len(zone_id) == 0:
+        exit(EXIT_FAILURE)
+
     if command == "ddns": 
         content, record_type = my_ip_address()
         print('MY IP: {} {}'.format(dns_name, content))
-        force = len(sys.argv) > 3 and sys.argv[3] == "-f"
+        force = "-f" in sys.argv[3:]
+    elif command == "set-mx":
+        if len(sys.argv) < 5:
+            usage()
+            exit(EXIT_FAILURE)
+
+        record_type = "MX"
+        content = sys.argv[3]
+        priority = sys.argv[4]
+
+        force = "-f" in sys.argv[4:]
     elif command == "set":
         if len(sys.argv) < 5:
             usage()
@@ -163,42 +231,35 @@ def main():
 
         record_type = sys.argv[3]
         content = sys.argv[4]
+        priority = sys.argv[5]
 
-        force = len(sys.argv) > 5 and sys.argv[5] == "-f"
+        force = "-f" in sys.argv[5:]
     elif command == "delete":
         if len(sys.argv) != 4:
             usage()
             exit(EXIT_FAILURE)
 
         record_type = sys.argv[3]
+    elif command == "get-zone-id":
+        print(zone_id, end='', flush=True)
+        exit(EXIT_SUCCESS)
     else:
         usage()
         exit(EXIT_FAILURE)
 
-    cf = CF.CloudFlare(email=email, token=token)
-
-    # grab the zone identifier
-    try:
-        params = {'name':zone_name}
-        zones = cf.zones.get(params=params)
-    except CF.exceptions.CloudFlareAPIError as e:
-        exit('/zones %d %s - api call failed' % (e, e))
-    except Exception as e:
-        exit('/zones.get - %s - api call failed' % (e))
-
-    if len(zones) == 0:
-        exit('/zones.get - %s - zone not found' % (zone_name))
-
-    if len(zones) != 1:
-        exit('/zones.get - %s - api call returned %d items' % (zone_name, len(zones)))
-
-    zone = zones[0]
+    extra_params = {}
 
     ret = False
     if command == "delete":
-        ret = delete_dns_record(cf, zone['id'], dns_name, record_type)
+        ret = delete_dns_record(cf, zone_id, dns_name, record_type, extra_params = extra_params)
     else:
-        ret = dns_update(cf, zone['id'], dns_name, content, record_type, force)
+        if record_type == "MX":
+            try:
+                extra_params['priority'] = int(priority)
+            except:
+                extra_params['priority'] = 10
+
+        ret = dns_update(cf, zone_id, dns_name, content, record_type, force, extra_params = extra_params)
 
     if (ret):
         exit(EXIT_SUCCESS)
