@@ -1,17 +1,70 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-import os
 import sys
 import requests
-
-sys.path.insert(0, os.path.abspath('..'))
+import argparse
 import CloudFlare as CF
 
-email="<cf_email>"
-token="<cf_token>"
-EXIT_SUCCESS=0
-EXIT_FAILURE=1
-NAME_TYPES=set(['AAAA', 'A', 'CNAME'])
+# Constants
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+NAME_TYPES = {'AAAA', 'A', 'CNAME'}
+SUPPORTED_TYPES = {'AAAA', 'A', 'CNAME', 'MX', 'TXT', 'NS'}
+
+def parse_args(args: list = None) -> argparse.Namespace:
+    ''' Return namespace containing pased args
+    '''
+    # top-level parsers
+    parser = argparse.ArgumentParser(description="Create and/or update CloudFlare DNS records")
+    subparsers = parser.add_subparsers(dest='subparser_name')
+
+    # top-level args
+    #parser.add_argument("-E", "--email", help='cloudflare email', nargs=1, required=True, default="<cf_email>")
+    #parser.add_argument("-T", "--token", help='cloudflare api token', nargs=1, required=True, default="<cf_token>")
+    parser.add_argument("-E", "--email", help='cloudflare email', nargs=1, default="<cf_email>")
+    parser.add_argument("-T", "--token", help='cloudflare api token', nargs=1, default="<cf_token>")
+
+    subcmd_set = subparsers.add_parser("set")
+    subcmd_set.add_argument("name", metavar="fqdn", help='fully qualified record name', nargs=1)
+    subcmd_set.add_argument("type", help='record type', nargs=1, type=str, choices=SUPPORTED_TYPES)
+    subcmd_set.add_argument('content', help='entry content')
+    subcmd_set.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set.add_argument("--ttl", help='time to live in seconds', nargs=1, type=int, default=1800)
+    subcmd_set.add_argument("--proxied", help='record is proxied or not', action="store_true")
+
+    subcmd_set_mx = subparsers.add_parser("set-mx")
+    subcmd_set_mx.add_argument("name", metavar="fqdn", help='fully qualified record name', nargs=1)
+    subcmd_set_mx.add_argument('content', metavar="fqdn", help='fully qualified domain name')
+    subcmd_set_mx.add_argument("priority", help='MX priority', nargs=1, type=int, default=10)
+    subcmd_set_mx.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set_mx.add_argument("--ttl", help='time to live in seconds', nargs=1, type=int, default=1800)
+
+    subcmd_delete = subparsers.add_parser("delete")
+    subcmd_delete.add_argument("name", metavar="fqdn", help='fully qualified record name', nargs=1)
+    subcmd_delete.add_argument("--type", help='record type', nargs=1, type=str, choices=SUPPORTED_TYPES, default=None)
+    subcmd_delete.add_argument('--content', help='entry content', required=False, default=None)
+
+    subcmd_get_zone_id = subparsers.add_parser("get-zone-id")
+    subcmd_get_zone_id.add_argument("name", help='fully qualified zone name', nargs=1)
+
+    subcmd_get_zones = subparsers.add_parser("get-zones")
+
+    if args == None:
+        parsed = parser.parse_args()
+    else:
+        parsed = parser.parse_args(args)
+
+    # Some final processing for later methods
+    if (parsed.subparser_name != "get_zones"):
+        split = parsed.name.split('.')
+        if len(split) < 2:
+            print("Invalid name {} specified".format(parsed.name))
+            exit(EXIT_FAILURE)
+
+        parsed.zone_name = ".".join(split[-2:])
+
+    return parsed
+
 
 def my_ip_address() -> tuple[str,str]:
     '''
@@ -184,26 +237,17 @@ def dns_update(cf: CF.CloudFlare, \
     print('CREATED: {} {}'.format(dns_name, content))
     return True
 
-def usage():
-    text="""usage: {0} ddns [fqdn-hostname] [-f]
-       {0} set [fqdn-hostname] [type] [content] [-f]
-       {0} set-mx [fqdn-hostname] [fqfn-mail-hostname] [priority] [-f]
-       {0} get-zone-id [zone-name]
-       {0} delete [fqdn-hostname] [type]""".format(sys.argv[0])
-
-    print(text)
 
 def main():
-    if len(sys.argv) < 3:
-        usage()
-        exit(EXIT_FAILURE)
+    '''
+    Entrypoint
+    '''
+    parsed = parse_args()
 
-    command = sys.argv[1]
-    dns_name = sys.argv[2]
-    zone_name = '.'.join(dns_name.split('.')[-2:])
-    force = False
+    print(parsed)
+    exit()
 
-    cf = CF.CloudFlare(email=email, token=token)
+    cf = CF.CloudFlare(email=parsed.email, token=parsed.token)
 
     # get zones
     zone_id = get_zone_id(cf, zone_name)
