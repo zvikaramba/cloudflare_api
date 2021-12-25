@@ -1,17 +1,59 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-import os
 import sys
 import requests
-
-sys.path.insert(0, os.path.abspath('..'))
+import argparse
 import CloudFlare as CF
 
-email="<cf_email>"
-token="<cf_token>"
-EXIT_SUCCESS=0
-EXIT_FAILURE=1
-NAME_TYPES=set(['AAAA', 'A', 'CNAME'])
+# Constants
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+NAME_TYPES = {'AAAA', 'A', 'CNAME'}
+SUPPORTED_TYPES = {'AAAA', 'A', 'CNAME', 'MX', 'TXT', 'NS'}
+
+def parse_args(args: list = None) -> argparse.Namespace:
+    ''' Return namespace containing pased args
+    '''
+    # top-level parsers
+    parser = argparse.ArgumentParser(description="Create and/or update CloudFlare DNS records")
+    subparsers = parser.add_subparsers()
+
+    # top-level args
+    parser.add_argument("-E", "--email", help='cloudflare email', nargs=1, required=True, default="<cf_email>")
+    parser.add_argument("-T", "--token", help='cloudflare api token', nargs=1, required=True, default="<cf_token>")
+
+    subcmd_set = subparsers.add_parser("set")
+    subcmd_set.add_argument("name", metavar="fqdn", help='fully qualified record name', nargs=1, required=True)
+    subcmd_set.add_argument("type", help='record type', nargs=1, type=str, choices=SUPPORTED_TYPES, required=True)
+    subcmd_set.add_argument('content', help='entry content', required=True)
+    subcmd_set.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set.add_argument("--ttl", help='time to live in seconds', nargs=1, type=int, default=1800)
+    subcmd_set.add_argument("--proxied", help='record is proxied or not', action="store_true", default=False)
+
+    subcmd_set_mx = subparsers.add_parser("set-mx")
+    subcmd_set_mx.add_argument("name", metavar="fqdn", help='fully qualified record name', nargs=1, required=True)
+    subcmd_set_mx.add_argument('content', metavar="fqdn", help='fully qualified domain name', required=True)
+    subcmd_set_mx.add_argument("priority", help='MX priority', nargs=1, type=int, default=10)
+    subcmd_set_mx.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set_mx.add_argument("--ttl", help='time to live in seconds', nargs=1, type=int, default=1800)
+
+    subcmd_delete = subparsers.add_parser("delete")
+    subcmd_delete.add_argument("name", metavar="fqdn", help='fully qualified record name', nargs=1, required=True)
+    subcmd_delete.add_argument("type", help='record type', nargs=1, type=str, choices=SUPPORTED_TYPES, required=False)
+    subcmd_delete.add_argument('content', help='entry content', required=False)
+
+    subcmd_get_zone_id = subparsers.add_parser("get-zone-id")
+    subcmd_get_zone_id.add_argument("name", help='fully qualified zone name', nargs=1, required=True)
+
+    subcmd_get_zones = subparsers.add_parser("get-zones")
+
+    if args == None:
+        parsed = parser.parse_args()
+    else:
+        parsed = parser.parse_args(args)
+
+    return parsed
+
 
 def my_ip_address() -> tuple[str,str]:
     '''
