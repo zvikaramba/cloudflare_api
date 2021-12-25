@@ -1,0 +1,60 @@
+{
+    "email": "user@example.com",
+    "token": "some-token",
+
+    "records": [
+        {
+            "action": "set",
+            "force": true,
+            "params": {
+                "name": "www.example.com",
+                "content": "subdomain.example.com",
+                "type": "CNAME",
+                "ttl": 600,
+                "proxied": true
+            }
+        },
+        {
+            "action": "ddns",
+            "params": {
+                "name": "subdomain.example.com",
+                "ttl": 600,
+                "proxied": true
+            }
+        },
+        {
+            "action": "set",
+            "params": {
+                "name": "mail.example.com",
+                "content": "192.168.0.1",
+                "type": "A",
+                "proxied": false
+            }
+        },
+        {
+            "action": "set",
+            "params": {
+                "name": "mx-1.exampe.com",
+                "content": "mail.example.com",
+                "type": "MX",
+                "priority": 100
+            }
+        },
+        {
+            "action": "set",
+            "params": {
+                "name": "_dmarc.example.com",
+                "content": "v=DMARC1;",
+                "type": "TXT",
+                "ttl": 1
+            }
+        },
+        {
+            "action": "delete",
+            "params": {
+                "name": "record.to.delete.example.com",
+                "type": "CNAME"
+            }
+        }
+    ]
+}
