@@ -1,19 +1,17 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-import os
 import sys
 import requests
-
-sys.path.insert(0, os.path.abspath('..'))
+import argparse
 import CloudFlare as CF
 
-email="<cf_email>"
-token="<cf_token>"
-EXIT_SUCCESS=0
-EXIT_FAILURE=1
-NAME_TYPES=set(['AAAA', 'A', 'CNAME'])
+# Constants
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+NAME_TYPES = {'AAAA', 'A', 'CNAME'}
+SUPPORTED_TYPES = {'AAAA', 'A', 'CNAME', 'MX', 'TXT', 'NS'}
 
-def my_ip_address() -> tuple[str,str]:
+def get_public_address() -> tuple[str,str]:
     '''
     Return internet ip address and type
     '''
@@ -27,9 +25,12 @@ def my_ip_address() -> tuple[str,str]:
     try:
         ip_address = requests.get(url).text
     except:
-        exit('{}: failed'.format(url))
+        print('{}: failed'.format(url))
+        exit(EXIT_FAILURE)
+
     if ip_address == '':
-        exit('{}: failed'.format(url))
+        print('{}: failed'.format(url))
+        exit(EXIT_FAILURE)
 
     if ':' in ip_address:
         ip_address_type = 'AAAA'
@@ -37,6 +38,73 @@ def my_ip_address() -> tuple[str,str]:
         ip_address_type = 'A'
 
     return ip_address, ip_address_type
+
+#def parser_handle_defaults()
+
+def parse_args(args: list = None) -> tuple[argparse.ArgumentParser, argparse.Namespace]:
+    ''' Return parser and namespace containing parsed args
+    '''
+
+    # top-level parsers
+    parser = argparse.ArgumentParser(description="Create and/or update CloudFlare DNS records")
+    subparsers = parser.add_subparsers(dest='command')
+
+    # top-level args
+    #parser.add_argument("-E", "--email", help='cloudflare email', required=True, default="<cf_email>")
+    #parser.add_argument("-T", "--token", help='cloudflare api token', required=True, default="<cf_token>")
+    parser.add_argument("-E", "--email", help='cloudflare email', default="<cf_email>")
+    parser.add_argument("-T", "--token", help='cloudflare api token', default="<cf_token>")
+
+    subcmd_ddns = subparsers.add_parser("ddns")
+    subcmd_ddns.add_argument("name", metavar="fqdn", help='fully qualified record name')
+    subcmd_ddns.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_ddns.add_argument("--ttl", help='time to live in seconds', type=int, default=1800)
+    subcmd_ddns.add_argument("--proxied", help='record is proxied or not', action="store_true")
+
+    subcmd_delete = subparsers.add_parser("delete")
+    subcmd_delete.add_argument("name", metavar="fqdn", help='fully qualified record name')
+    subcmd_delete.add_argument("--type", help='record type', type=str, choices=SUPPORTED_TYPES, required=False, default=None)
+    subcmd_delete.add_argument('--content', help='entry content', required=False, default=None)
+
+    subcmd_set = subparsers.add_parser("set")
+    subcmd_set.add_argument("name", metavar="fqdn", help='fully qualified record name')
+    subcmd_set.add_argument("type", help='record type', type=str, choices=SUPPORTED_TYPES)
+    subcmd_set.add_argument('content', help='entry content')
+    subcmd_set.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set.add_argument("--ttl", help='time to live in seconds', type=int, default=1800)
+    subcmd_set.add_argument("--proxied", help='record is proxied or not', action="store_true")
+
+    subcmd_set_mx = subparsers.add_parser("set-mx")
+    subcmd_set_mx.add_argument("name", metavar="fqdn", help='fully qualified record name')
+    subcmd_set_mx.add_argument('content', help='fully qualified domain name')
+    subcmd_set_mx.add_argument("priority", help='MX priority', type=int, default=10)
+    subcmd_set_mx.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set_mx.add_argument("--ttl", help='time to live in seconds', type=int, default=1800)
+    subcmd_set_mx.set_defaults(type="MX")
+
+    subcmd_get_zone_id = subparsers.add_parser("get-zone-id")
+    subcmd_get_zone_id.add_argument("name", help='fully qualified zone name')
+
+    subcmd_get_zones = subparsers.add_parser("get-zones")
+
+    if args == None:
+        parsed = parser.parse_args()
+    else:
+        parsed = parser.parse_args(args)
+
+    # Some final processing
+    if (parsed.command != "get_zones"):
+        split = parsed.name.split('.')
+        if len(split) < 2:
+            print("Invalid name {} specified".format(parsed.name))
+            exit(EXIT_FAILURE)
+
+        parsed.zone_name = ".".join(split[-2:])
+
+    if (parsed.command == "ddns"):
+        parsed.content, parsed.type = get_public_address()
+
+    return parser, parsed
 
 def get_zones(cf: CF.CloudFlare, zone_name: str = None) -> list:
     # grab the zone identifier
@@ -53,7 +121,7 @@ def get_zones(cf: CF.CloudFlare, zone_name: str = None) -> list:
 
     return zones
 
-def get_zone_id(cf: CF.CloudFlare, zone_name) -> str:
+def get_zone_id(cf: CF.CloudFlare, zone_name: str) -> str:
     '''
     '''
     zones = get_zones(cf, zone_name)
@@ -184,87 +252,69 @@ def dns_update(cf: CF.CloudFlare, \
     print('CREATED: {} {}'.format(dns_name, content))
     return True
 
-def usage():
-    text="""usage: {0} ddns [fqdn-hostname] [-f]
-       {0} set [fqdn-hostname] [type] [content] [-f]
-       {0} set-mx [fqdn-hostname] [fqfn-mail-hostname] [priority] [-f]
-       {0} get-zone-id [zone-name]
-       {0} delete [fqdn-hostname] [type]""".format(sys.argv[0])
+def get_handlers(namespace: argparse.Namespace) -> dict:
+    '''
+    Get subcommand handlers
+    '''
+    handlers = {}
 
-    print(text)
 
-def main():
-    if len(sys.argv) < 3:
-        usage()
-        exit(EXIT_FAILURE)
-
-    command = sys.argv[1]
-    dns_name = sys.argv[2]
-    zone_name = '.'.join(dns_name.split('.')[-2:])
-    force = False
-
-    cf = CF.CloudFlare(email=email, token=token)
-
-    # get zones
-    zone_id = get_zone_id(cf, zone_name)
-    if len(zone_id) == 0:
-        exit(EXIT_FAILURE)
-
-    if command == "ddns": 
-        content, record_type = my_ip_address()
-        print('MY IP: {} {}'.format(dns_name, content))
-        force = "-f" in sys.argv[3:]
-    elif command == "set-mx":
-        if len(sys.argv) < 5:
-            usage()
-            exit(EXIT_FAILURE)
-
-        record_type = "MX"
-        content = sys.argv[3]
-        priority = sys.argv[4]
-
-        force = "-f" in sys.argv[4:]
-    elif command == "set":
-        if len(sys.argv) < 5:
-            usage()
-            exit(EXIT_FAILURE)
-
-        record_type = sys.argv[3]
-        content = sys.argv[4]
-        priority = sys.argv[5]
-
-        force = "-f" in sys.argv[5:]
-    elif command == "delete":
-        if len(sys.argv) != 4:
-            usage()
-            exit(EXIT_FAILURE)
-
-        record_type = sys.argv[3]
-    elif command == "get-zone-id":
+    if parsed.command == "ddns":
+        print('MY IP: {} {}'.format(parsed.content, parsed.type))
+    elif parsed.command == "set-mx":
+        pass
+    elif parsed.command == "set":
+        pass
+    elif parsed.command == "delete":
+        pass
+    elif parsed.command == "get-zone-id":
         print(zone_id, end='', flush=True)
         exit(EXIT_SUCCESS)
-    else:
-        usage()
-        exit(EXIT_FAILURE)
 
     extra_params = {}
 
     ret = False
-    if command == "delete":
+    if parsed.command == "delete":
         ret = delete_dns_record(cf, zone_id, dns_name, record_type, extra_params = extra_params)
     else:
-        if record_type == "MX":
-            try:
-                extra_params['priority'] = int(priority)
-            except:
-                extra_params['priority'] = 10
 
         ret = dns_update(cf, zone_id, dns_name, content, record_type, force, extra_params = extra_params)
 
+
+
+    return handlers
+
+def main():
+    '''
+    Entrypoint
+    '''
+    parser, parsed = parse_args()
+    def usage():
+        '''
+        Print usage and exit
+        '''
+        print(parser.print_usage())
+        exit(EXIT_FAILURE)
+
+    cf = CF.CloudFlare(email=parsed.email, token=parsed.token)
+
+    # get zones
+    zone_id = get_zone_id(cf, parsed.zone_name)
+    if len(zone_id) == 0:
+        print('Failed to get/find zone-id for {}'.format(parsed.zone_name))
+        exit(EXIT_FAILURE)
+
+    handlers = get_handlers(parsed)
+    if parsed.command not in handlers:
+        print("Error: Unimplemented subcommand")
+        exit(EXIT_FAILURE)
+
+    # run command handler
+    ret = handlers[parsed.command]()
+
     if (ret):
         exit(EXIT_SUCCESS)
-    
-    exit(EXIT_FAILURE)
 
+    exit(EXIT_FAILURE)
 if __name__ == '__main__':
     main()
