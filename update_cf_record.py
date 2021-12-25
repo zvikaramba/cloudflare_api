@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
+from json.decoder import JSONDecodeError
 import requests
+import sys
 import CloudFlare as CF
 
 # Constants
@@ -56,19 +59,23 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest='command')
 
     # top-level args
-    parser.add_argument("-E", "--email", help='cloudflare email', required=True)
-    parser.add_argument("-T", "--token", help='cloudflare api token', required=True)
+    subcmd_json = subparsers.add_parser("json")
+    subcmd_json.add_argument("files", metavar="json file(s)", type=str, nargs='+')
 
     subcmd_ddns = subparsers.add_parser("ddns")
     subcmd_ddns.add_argument("name", metavar="fqdn", help='fully qualified record name')
     subcmd_ddns.add_argument("--ttl", help='time to live in seconds', type=int, required = False)
     subcmd_ddns.add_argument("--proxied", help='proxied or not, 0 for False, True otherwise', type=int, required = False)
     subcmd_ddns.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_ddns.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_ddns.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_delete = subparsers.add_parser("delete")
     subcmd_delete.add_argument("name", metavar="fqdn", help='fully qualified record name')
     subcmd_delete.add_argument("--type", help='record type', type=str, choices=SUPPORTED_TYPES, required=False)
     subcmd_delete.add_argument('--content', help='entry content', required=False)
+    subcmd_delete.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_delete.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_set = subparsers.add_parser("set")
     subcmd_set.add_argument("name", metavar="fqdn", help='fully qualified record name')
@@ -77,6 +84,8 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subcmd_set.add_argument("--ttl", help='time to live in seconds', type=int, required = False)
     subcmd_set.add_argument("--proxied", help='proxied or not, 0 for False, True otherwise', type=int, required = False)
     subcmd_set.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_set.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_set_mx = subparsers.add_parser("set-mx")
     subcmd_set_mx.add_argument("name", metavar="fqdn", help='fully qualified record name')
@@ -84,12 +93,18 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subcmd_set_mx.add_argument("-p", "--priority", help='MX priority', type=int, required = False, default=10)
     subcmd_set_mx.add_argument("--ttl", help='time to live in seconds', type=int, required = False)
     subcmd_set_mx.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set_mx.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_set_mx.add_argument("-T", "--token", help='cloudflare api token', required=True)
     subcmd_set_mx.set_defaults(type="MX")
 
     subcmd_get_zone_id = subparsers.add_parser("get-zone-id")
     subcmd_get_zone_id.add_argument("name", help='fully qualified zone name')
+    subcmd_get_zone_id.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_get_zone_id.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_get_zones = subparsers.add_parser("get-zones")
+    subcmd_get_zones.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_get_zones.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     if args == None:
         parsed = parser.parse_args()
@@ -98,27 +113,8 @@ def parse_args(args: list = None) -> argparse.Namespace:
 
     # make sure a subcommand was specified
     if not parsed.command:
-        print("Error: Specify a subcommend")
+        print("Error: Specify a subcommend", file=sys.stderr)
         parser.print_help()
-        exit(EXIT_FAILURE)
-
-    # Some final processing
-    if (parsed.command != "get_zones"):
-        split = parsed.name.split('.')
-        if len(split) < 2:
-            print("Invalid name {} specified".format(parsed.name))
-            exit(EXIT_FAILURE)
-
-        parsed.zone_name = ".".join(split[-2:])
-
-    if parsed.command == "ddns":
-        parsed.content, parsed.type = get_public_address()
-        if len(parsed.content) == 0:
-            print("Failed to get public ip address")
-            exit(EXIT_FAILURE)
-
-    elif parsed.command == "set" and parsed.type == "MX":
-        print("Use set-mx command instead")
         exit(EXIT_FAILURE)
 
     return parsed
@@ -138,15 +134,26 @@ def get_zones(cf: CF.CloudFlare, zone_name: str = None) -> list:
 
     return zones
 
+def get_zone_name(name: str) -> str:
+    '''
+    Get zone name from fully-qualified name
+    '''
+    split = name.split('.')
+    if len(split) < 2:
+        print("Invalid name {} specified".format(name), file=sys.stderr)
+        return ''
+
+    return ".".join(split[-2:])
+
 def get_zone_id(cf: CF.CloudFlare, zone_name: str) -> str:
     '''
     '''
     zones = get_zones(cf, zone_name)
     if len(zones) == 0:
-        print('/zones.get - {} - zone not found'.format((zone_name)))
+        print('/zones.get - {} - zone not found'.format((zone_name)), file=sys.stderr)
         return ''
     elif len(zones) != 1:
-        print('/zones.get - {} - api call returned {} items'.format(zone_name, len(zones)))
+        print('/zones.get - {} - api call returned {} items'.format(zone_name, len(zones)), file=sys.stderr)
         return ''
 
     return zones[0]['id']
@@ -158,16 +165,16 @@ def delete_record(cf: CF.CloudFlare, zone_id: str, params: dict) -> bool:
     try:
         dns_records = cf.zones.dns_records.get(zone_id, params = params)
     except CF.exceptions.CloudFlareAPIError as e:
-        print('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e))
+        print('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
         return False
 
     ret = True
     for record in dns_records:
         try:
-            del_record = cf.zones.dns_records.delete(zone_id, record['id'])
-            print('DELETED: {}/{}/{}\n'.format(record['name'], record['type'], record['content']))
+            cf.zones.dns_records.delete(zone_id, record['id'])
+            print('DELETED: {}/{}/{}\n'.format(record['name'], record['type'], record['content']), file=sys.stderr)
         except CF.exceptions.CloudFlareAPIError as e:
-            print('/zones.dns_records.delete %s - %d %s - api call failed' % (params['name'], e, e))
+            print('/zones.dns_records.delete %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
             ret = False
 
     return ret
@@ -179,33 +186,33 @@ def add_update_record(cf: CF.CloudFlare, zone_id: str, params: dict, force: bool
     try:
         dns_records = cf.zones.dns_records.get(zone_id, params = {'name': params['name']})
     except CF.exceptions.CloudFlareAPIError as e:
-        print('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e))
+        print('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
         return False
 
-    print('Params to set: {}'.format(params))
+    print('Params to set: {}'.format(params), file=sys.stderr)
 
     # update the record - unless it's already correct
     for record in dns_records:
         patch = False
         try:
             if record['type'] == params['type']:
-                print('Found record: {}\n'.format(record))
+                print('Found record: {}\n'.format(record), file=sys.stderr)
 
                 for key in params.keys():
                     if record[key] != params[key]:
                         print('\tNeed to update {} from {} -> {}'\
-                                .format(key, record[key], params[key]))
+                                .format(key, record[key], params[key]), file=sys.stderr)
                         patch = True
                         break
 
                 if patch == False: # and params['content'] == record['content']:
-                    print('UNCHANGED: {} {}'.format(record['name'], record['content']))
+                    print('UNCHANGED: {} {}'.format(record['name'], record['content']), file=sys.stderr)
                     return True
             elif params['type'] in NAME_TYPES and record['type'] in NAME_TYPES:
                 # we need to patch the record - check -f flag
                 if not force:
                     print('Not changing record type from {} to {} - use -f'\
-                        .format(record['type'], params['type']))
+                        .format(record['type'], params['type']), file=sys.stderr)
 
                     return False
 
@@ -215,34 +222,35 @@ def add_update_record(cf: CF.CloudFlare, zone_id: str, params: dict, force: bool
                 continue
 
             if patch:
-                print('PATCH: {} ; Changing record type/content to {}/{}'.format(params['name'], params['type'], params['content']))
+                print('PATCH: {} ; Changing record type/content to {}/{}'.format(params['name'], params['type'], params['content']), file=sys.stderr)
                 record = cf.zones.dns_records.patch(zone_id, record['id'], data=params)
             else:
                 record = cf.zones.dns_records.put(zone_id, record['id'], data=params)
 
         except CF.exceptions.CloudFlareAPIError as e:
             if patch:
-                print('/zones.dns_records.patch %s - %d %s - api call failed' % (params['name'], e, e))
+                print('/zones.dns_records.patch %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
             else:
-                print('/zones.dns_records.put %s - %d %s - api call failed' % (params['name'], e, e))
+                print('/zones.dns_records.put %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
 
 
-        print('UPDATED: {} {} -> {}'.format(params['name'], record['content'], params['content']))
+        print('UPDATED: {} {} -> {}'.format(params['name'], record['content'], params['content']), file=sys.stderr)
         return True
 
     # no exsiting dns record to update - so create dns record
     try:
         record = cf.zones.dns_records.post(zone_id, data=params)
     except CF.exceptions.CloudFlareAPIError as e:
-        print('/zones.dns_records.post {} - api call failed'.format(params['name']))
+        print('/zones.dns_records.post {} - api call failed'.format(params['name']), file=sys.stderr)
         return False
 
-    print('CREATED: {} {}'.format(params['name'], params['content']))
+    print('CREATED: {} {}'.format(params['name'], params['content']), file=sys.stderr)
     return True
 
-def generate_handler(p: argparse.Namespace):
-    ''' argparse.Namespace -> function[str]
-    Get command handler
+def clean_params(p: dict) -> dict:
+    '''
+    Extract and/or convert fields from p into
+    params for use by cf api
     '''
     params = {}
 
@@ -259,53 +267,121 @@ def generate_handler(p: argparse.Namespace):
         else:
             params[key] = p[key]
 
-    def _delete_record():
-        return delete_record(p['cf'], p['zone_id'], params)
+    return params
 
-    def _set_record():
-        return add_update_record(p['cf'], p['zone_id'], params, p['force'])
+def process_records(cf: CF.CloudFlare, records: dict) -> bool:
+    '''
+    '''
+    required_keys = ['action', 'params']
+    ret = True
 
-    def _get_zone_id():
-        print(p['zone_id'], end='', flush=True)
-        return True
+    for record in records['records']:
+        for key in required_keys:
+            if key not in record:
+                print("Error: Missing key {}".format(key), file=sys.stderr)
+                ret = False
+                continue
 
-    def _get_zones():
-        zones = _get_zones(p['cf'])
-        for zone in zones:
-            print(zone['name'])
+        force = 'force' in record and record['force']
 
-        return True
+        if record['action'] == "set":
+            pass
+        elif record['action'] == "ddns":
+            content, type = get_public_address()
+            if len(content) == 0:
+                print("Failed to get public ip address", file=sys.stderr)
+            pass
+        elif record['action'] == "delete":
+            pass
+        elif record['action'] == "get-zone-id":
+            print(zone_id, end='', flush=True)
+            pass
+        elif record['action'] == "get-zones":
+            for zone in get_zones(cf):
+                print(zone['name'])
+        else:
+            print("Error: Unknown command {}".format(record['action'], file=sys.stderr))
+            ret = False
 
-    def get_handler(name: str):
-        ''' str -> function
-        '''
-        func = _set_record
-        if name == "get-zone-id":
-            func = _get_zone_id
-        elif name == "get-zones":
-            func = _get_zones
-        elif name == "delete":
-            func = _delete_record
+    return ret
 
-        return func
+def read_json_file(path: str) -> object:
+    '''
+    Unmarshall json from file
+    '''
+    with open(path, mode='rt') as file:
+        try:
+            decoded = json.load(file)
+            if type(decoded) == dict:
+                return decoded
 
-    return get_handler
+            print("Error: Invalid format", file=sys.stderr)
+        except JSONDecodeError:
+            print("Error: Failed to parse json", file=sys.stderr)
+
+    return None
+
+class _batch:
+    '''
+    '''
+    def __init__(self, email: str, token: str, records: list):
+        self.email = email
+        self.token = token
+        self.records = records
 
 def main():
     '''
     Entrypoint
     '''
-    parsed = parse_args()
-    parsed.cf = CF.CloudFlare(email=parsed.email, token=parsed.token)
+    batches = []
+    ret = True
 
-    # get zones
-    parsed.zone_id = get_zone_id(parsed.cf, parsed.zone_name)
-    if len(parsed.zone_id) == 0:
-        print('Failed to get/find zone-id for {}'.format(parsed.zone_name))
-        exit(EXIT_FAILURE)
+    # Parse command line
+    parsed = vars(parse_args())
 
-    # run command handler
-    ret = generate_handler(vars(parsed))(parsed.command)()
+
+    # Read in json files
+    if parsed['command'] == 'json':
+        required_keys = ['email', 'token', 'records']
+        for file in parsed['files']:
+            decoded = read_json_file(file)
+            if not decoded:
+                ret = False
+                continue
+
+            missing_key = False
+            for key in required_keys:
+                if key not in decoded:
+                    print("Error: Missing key {}".format(key), file=sys.stderr)
+                    missing_key = True
+                    break
+
+            if missing_key:
+                ret = False
+                continue
+
+            if type(decoded['records']) is not list:
+                print("Error: Invalid record format", file=sys.stderr)
+                ret = False
+                continue
+
+            batches.append(_batch(decoded['email'], decoded['token'], decoded['records']))
+    else:
+        record = {
+            "action": parsed.command,
+            "params": clean_params(parsed)
+        }
+
+        batches.append(_batch(parsed.email, parsed.token, [record]))
+
+
+    for batch in batches:
+        cf = CF.CloudFlare(email=batch.email, token=batch.token)
+
+        # run command handler
+        if not process_records(cf, batch.records):
+            ret = False
+
     if (ret):
         exit(EXIT_SUCCESS)
 
