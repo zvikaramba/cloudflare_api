@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import requests
 import CloudFlare as CF
 
@@ -56,19 +57,23 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest='command')
 
     # top-level args
-    parser.add_argument("-E", "--email", help='cloudflare email', required=True)
-    parser.add_argument("-T", "--token", help='cloudflare api token', required=True)
+    subcmd_json = subparsers.add_parser("json")
+    subcmd_json.add_argument("files", metavar="json file(s)", type=str, nargs='+')
 
     subcmd_ddns = subparsers.add_parser("ddns")
     subcmd_ddns.add_argument("name", metavar="fqdn", help='fully qualified record name')
     subcmd_ddns.add_argument("--ttl", help='time to live in seconds', type=int, required = False)
     subcmd_ddns.add_argument("--proxied", help='proxied or not, 0 for False, True otherwise', type=int, required = False)
     subcmd_ddns.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_ddns.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_ddns.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_delete = subparsers.add_parser("delete")
     subcmd_delete.add_argument("name", metavar="fqdn", help='fully qualified record name')
     subcmd_delete.add_argument("--type", help='record type', type=str, choices=SUPPORTED_TYPES, required=False)
     subcmd_delete.add_argument('--content', help='entry content', required=False)
+    subcmd_delete.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_delete.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_set = subparsers.add_parser("set")
     subcmd_set.add_argument("name", metavar="fqdn", help='fully qualified record name')
@@ -77,6 +82,8 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subcmd_set.add_argument("--ttl", help='time to live in seconds', type=int, required = False)
     subcmd_set.add_argument("--proxied", help='proxied or not, 0 for False, True otherwise', type=int, required = False)
     subcmd_set.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
+    subcmd_set.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_set.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_set_mx = subparsers.add_parser("set-mx")
     subcmd_set_mx.add_argument("name", metavar="fqdn", help='fully qualified record name')
@@ -85,11 +92,17 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subcmd_set_mx.add_argument("--ttl", help='time to live in seconds', type=int, required = False)
     subcmd_set_mx.add_argument("-f", "--force", help='Overwrite record if present', action="store_true")
     subcmd_set_mx.set_defaults(type="MX")
+    subcmd_set_mx.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_set_mx.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_get_zone_id = subparsers.add_parser("get-zone-id")
     subcmd_get_zone_id.add_argument("name", help='fully qualified zone name')
+    subcmd_get_zone_id.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_get_zone_id.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     subcmd_get_zones = subparsers.add_parser("get-zones")
+    subcmd_get_zones.add_argument("-E", "--email", help='cloudflare email', required=True)
+    subcmd_get_zones.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
     if args == None:
         parsed = parser.parse_args()
