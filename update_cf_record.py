@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-import requests
 import argparse
+import requests
 import CloudFlare as CF
 
 # Constants
@@ -10,31 +10,40 @@ EXIT_FAILURE = 1
 NAME_TYPES = {'AAAA', 'A', 'CNAME'}
 SUPPORTED_TYPES = {'AAAA', 'A', 'CNAME', 'MX', 'TXT', 'NS'}
 
+# This list is adjustable - plus some v6 enabled services are needed
+PUBLIC_IP_URLS = [
+    'https://ifconfig.me/ip',
+    'https://api.ipify.org',
+    'http://myexternalip.com/raw',
+    'http://www.trackip.net/ip',
+    'http://myip.dnsomatic.com',
+]
+
+CONNECT_TIMEOUT = 5
+
 def get_public_address() -> tuple[str,str]:
     '''
     Return internet ip address and type
     '''
+    ip_address = ''
+    ip_address_type = ''
 
-    # This list is adjustable - plus some v6 enabled services are needed
-    # url = 'http://myip.dnsomatic.com'
-    # url = 'http://www.trackip.net/ip'
-    # url = 'http://myexternalip.com/raw'
-    #url = 'https://api.ipify.org'
-    url = 'https://ifconfig.me/ip'
-    try:
-        ip_address = requests.get(url).text
-    except:
-        print('{}: failed'.format(url))
-        exit(EXIT_FAILURE)
+    for url in PUBLIC_IP_URLS:
 
-    if ip_address == '':
-        print('{}: failed'.format(url))
-        exit(EXIT_FAILURE)
+        try:
+            ip_address = requests.get(url=url, timeout=CONNECT_TIMEOUT).text
+        except:
+            continue
 
-    if ':' in ip_address:
-        ip_address_type = 'AAAA'
-    else:
-        ip_address_type = 'A'
+        if ip_address == '':
+            continue
+
+        if ':' in ip_address:
+            ip_address_type = 'AAAA'
+        else:
+            ip_address_type = 'A'
+
+        break
 
     return ip_address, ip_address_type
 
@@ -104,6 +113,10 @@ def parse_args(args: list = None) -> argparse.Namespace:
 
     if parsed.command == "ddns":
         parsed.content, parsed.type = get_public_address()
+        if len(parsed.content) == 0:
+            print("Failed to get public ip address")
+            exit(EXIT_FAILURE)
+
     elif parsed.command == "set" and parsed.type == "MX":
         print("Use set-mx command instead")
         exit(EXIT_FAILURE)
