@@ -189,7 +189,9 @@ def add_update_record(cf: CF.CloudFlare, zone_id: str, params: dict, force: bool
                 print('Found record: {}\n'.format(record), file=sys.stderr)
 
                 for key in params.keys():
-                    if record[key] != params[key]:
+                    if key not in record:
+                        continue
+                    elif record[key] != params[key]:
                         print('\tNeed to update {} from {} -> {}'\
                                 .format(key, record[key], params[key]), file=sys.stderr)
                         patch = True
