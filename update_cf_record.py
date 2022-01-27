@@ -23,6 +23,15 @@ PUBLIC_IP_URLS = [
 
 CONNECT_TIMEOUT = 5
 
+class _batch:
+    '''
+    '''
+    def __init__(self, email: str, token: str, records: list, force = False):
+        self.email = email
+        self.token = token
+        self.records = records
+        self.force = force
+
 def get_public_address() -> tuple[str,str]:
     '''
     Return internet ip address and type
@@ -261,13 +270,15 @@ def clean_params(p: dict) -> dict:
 
     return params
 
-def process_records(cf: CF.CloudFlare, records: dict) -> bool:
+def process_records(batch: _batch) -> bool:
     '''
     '''
     required_keys = ['action', 'params']
     ret = True
 
-    for record in records:
+    cf = CF.CloudFlare(email=batch.email, token=batch.token)
+
+    for record in batch.records:
         for key in required_keys:
             if key not in record:
                 print("Error: Missing key {}".format(key), file=sys.stderr)
@@ -282,7 +293,7 @@ def process_records(cf: CF.CloudFlare, records: dict) -> bool:
             continue
 
         params = record['params']
-        force = 'force' in params and params['force']
+        force = batch.force or 'force' in params and params['force']
         zone_name = get_zone_name(params['name'])
         zone_id = get_zone_id(cf, zone_name)
 
@@ -327,14 +338,6 @@ def read_json_file(path: str) -> object:
 
     return None
 
-class _batch:
-    '''
-    '''
-    def __init__(self, email: str, token: str, records: list):
-        self.email = email
-        self.token = token
-        self.records = records
-
 def main():
     '''
     Entrypoint
@@ -365,12 +368,14 @@ def main():
                 ret = False
                 continue
 
+            force = 'force' in decoded and decoded['force']
+
             if type(decoded['records']) is not list:
                 print("Error: Invalid record format", file=sys.stderr)
                 ret = False
                 continue
 
-            batches.append(_batch(decoded['email'], decoded['token'], decoded['records']))
+            batches.append(_batch(decoded['email'], decoded['token'], decoded['records'], force = force))
     else:
         record = {
             "action": parsed['command'],
@@ -381,10 +386,8 @@ def main():
 
 
     for batch in batches:
-        cf = CF.CloudFlare(email=batch.email, token=batch.token)
-
         # run command handler
-        if not process_records(cf, batch.records):
+        if not process_records(batch):
             ret = False
 
     if (ret):
