@@ -257,7 +257,7 @@ def clean_params(params: 'dict') -> 'dict':
     '''
     new_params = {}
 
-    keys = ['name', 'type', 'content', 'ttl', 'proxied', 'priority']
+    keys = ['name', 'type', 'content', 'ttl', 'proxied', 'priority', 'force']
     bool_keys = set(['proxied'])
     for key in keys:
         if (key not in params) or (params[key] is None):
@@ -291,8 +291,12 @@ def process_records(batch: '_batch') -> 'bool':
 
             continue
 
+        force = batch.force
+        if 'force' in params:
+            force = force or params['force']
+            del params['force']
+
         params = record['params']
-        force = batch.force or 'force' in params and params['force']
         zone_name = get_zone_name(params['name'])
         zone_id = get_zone_id(cf, zone_name)
 
