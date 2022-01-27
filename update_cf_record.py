@@ -2,8 +2,8 @@
 
 import argparse
 import json
-import requests
 import sys
+import requests
 import CloudFlare as CF
 
 # Constants
@@ -26,13 +26,13 @@ CONNECT_TIMEOUT = 5
 class _batch:
     '''
     '''
-    def __init__(self, email: str, token: str, records: list, force = False):
+    def __init__(self, email: 'str', token: 'str', records: 'list', force = False):
         self.email = email
         self.token = token
         self.records = records
         self.force = force
 
-def get_public_address() -> tuple[str,str]:
+def get_public_address() -> 'tuple[str,str]':
     '''
     Return internet ip address and type
     '''
@@ -58,7 +58,7 @@ def get_public_address() -> tuple[str,str]:
 
     return ip_address, ip_address_type
 
-def parse_args(args: list = None) -> argparse.Namespace:
+def parse_args(args: 'list' = None) -> 'argparse.Namespace':
     ''' Return parser and namespace containing parsed args
     '''
 
@@ -105,7 +105,7 @@ def parse_args(args: list = None) -> argparse.Namespace:
     subcmd_get_zones.add_argument("-E", "--email", help='cloudflare email', required=True)
     subcmd_get_zones.add_argument("-T", "--token", help='cloudflare api token', required=True)
 
-    if args == None:
+    if args is None:
         parsed = parser.parse_args()
     else:
         parsed = parser.parse_args(args)
@@ -114,26 +114,27 @@ def parse_args(args: list = None) -> argparse.Namespace:
     if not parsed.command:
         print("Error: Specify a subcommend", file=sys.stderr)
         parser.print_help()
-        exit(EXIT_FAILURE)
+        sys.exit(EXIT_FAILURE)
 
     return parsed
 
-def get_zones(cf: CF.CloudFlare, zone_name: str = None) -> list:
-    # grab the zone identifier
+def get_zones(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'list':
+    ''' Get the zone identifiers
+    '''
     try:
-        params = dict()
+        params = {}
         if zone_name:
             params['name'] = zone_name
 
         zones = cf.zones.get(params=params)
     except CF.exceptions.CloudFlareAPIError as e:
-        exit('/zones %d %s - api call failed' % (e, e))
+        sys.exit('/zones %d %s - api call failed' % (e, e))
     except Exception as e:
-        exit('/zones.get - %s - api call failed' % (e))
+        sys.exit('/zones.get - %s - api call failed' % (e))
 
     return zones
 
-def get_zone_name(name: str) -> str:
+def get_zone_name(name: 'str') -> 'str':
     '''
     Get zone name from fully-qualified name
     '''
@@ -144,7 +145,7 @@ def get_zone_name(name: str) -> str:
 
     return ".".join(split[-2:])
 
-def get_zone_id(cf: CF.CloudFlare, zone_name: str) -> str:
+def get_zone_id(cf: 'CF.CloudFlare', zone_name: 'str') -> 'str':
     '''
     '''
     zones = get_zones(cf, zone_name)
@@ -157,7 +158,7 @@ def get_zone_id(cf: CF.CloudFlare, zone_name: str) -> str:
 
     return zones[0]['id']
 
-def delete_record(cf: CF.CloudFlare, zone_id: str, params: dict) -> bool:
+def delete_record(cf: 'CF.CloudFlare', zone_id: 'str', params: 'dict') -> 'bool':
     ''' Delete a dns record and return True if successful
     '''
 
@@ -178,7 +179,7 @@ def delete_record(cf: CF.CloudFlare, zone_id: str, params: dict) -> bool:
 
     return ret
 
-def add_update_record(cf: CF.CloudFlare, zone_id: str, params: dict, force: bool = False) -> bool:
+def add_update_record(cf: 'CF.CloudFlare', zone_id: 'str', params: 'dict', force: 'bool' = False) -> 'bool':
     ''' Update/create a dns record and return True if successful
     '''
 
@@ -200,13 +201,14 @@ def add_update_record(cf: CF.CloudFlare, zone_id: str, params: dict, force: bool
                 for key in params.keys():
                     if key not in record:
                         continue
-                    elif record[key] != params[key]:
+
+                    if record[key] != params[key]:
                         print('\tNeed to update {} from {} -> {}'\
                                 .format(key, record[key], params[key]), file=sys.stderr)
                         patch = True
                         break
 
-                if patch == False: # and params['content'] == record['content']:
+                if patch is False:
                     print('UNCHANGED: {} {}'.format(record['name'], record['content']), file=sys.stderr)
                     return True
             elif params['type'] in NAME_TYPES and record['type'] in NAME_TYPES:
@@ -248,29 +250,27 @@ def add_update_record(cf: CF.CloudFlare, zone_id: str, params: dict, force: bool
     print('CREATED: {} {}'.format(params['name'], params['content']), file=sys.stderr)
     return True
 
-def clean_params(p: dict) -> dict:
+def clean_params(params: 'dict') -> 'dict':
     '''
     Extract and/or convert fields from p into
     params for use by cf api
     '''
-    params = {}
+    new_params = {}
 
     keys = ['name', 'type', 'content', 'ttl', 'proxied', 'priority']
     bool_keys = set(['proxied'])
     for key in keys:
-        if key not in p:
-            continue
-        elif p[key] is None:
+        if (key not in params) or (params[key] is None):
             continue
 
-        if key in bool_keys and type(p[key]) is not bool:
-            params[key] = (p[key] != 0)
+        if key in bool_keys and not isinstance(params[key], bool):
+            new_params[key] = (params[key] != 0)
         else:
-            params[key] = p[key]
+            new_params[key] = params[key]
 
-    return params
+    return new_params
 
-def process_records(batch: _batch) -> bool:
+def process_records(batch: '_batch') -> 'bool':
     '''
     '''
     required_keys = ['action', 'params']
@@ -284,7 +284,6 @@ def process_records(batch: _batch) -> bool:
                 print("Error: Missing key {}".format(key), file=sys.stderr)
                 ret = False
                 continue
-
 
         if record['action'] == "get-zones":
             for zone in get_zones(cf):
@@ -316,20 +315,19 @@ def process_records(batch: _batch) -> bool:
             params['content'] = content
             params['type'] = type
 
-
-        # default action: set
+        # default action: 'set'
         add_update_record(cf, zone_id, params, force)
 
     return ret
 
-def read_json_file(path: str) -> object:
+def read_json_file(path: 'str') -> 'object':
     '''
     Unmarshall json from file
     '''
     with open(path, mode='rt') as file:
         try:
             decoded = json.load(file)
-            if type(decoded) == dict:
+            if isinstance(decoded, dict):
                 return decoded
 
             print("Error: Invalid format", file=sys.stderr)
@@ -391,9 +389,9 @@ def main():
             ret = False
 
     if (ret):
-        exit(EXIT_SUCCESS)
+        sys.exit(EXIT_SUCCESS)
 
-    exit(EXIT_FAILURE)
+    sys.exit(EXIT_FAILURE)
 
 if __name__ == '__main__':
     main()
