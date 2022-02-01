@@ -291,14 +291,14 @@ def process_records(batch: '_batch') -> 'bool':
 
             continue
 
+        params = record['params']
+        zone_name = get_zone_name(params['name'])
+        zone_id = get_zone_id(cf, zone_name)
+
         force = batch.force
         if 'force' in params:
             force = force or params['force']
             del params['force']
-
-        params = record['params']
-        zone_name = get_zone_name(params['name'])
-        zone_id = get_zone_id(cf, zone_name)
 
         if record['action'] == "get-zone-id":
             print(zone_id, end='', flush=True)
