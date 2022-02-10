@@ -143,7 +143,13 @@ def get_zone_name(name: 'str') -> 'str':
         print("Invalid name {} specified".format(name), file=sys.stderr)
         return ''
 
-    return ".".join(split[-2:])
+    join_index = -2
+
+    # handle names like .co.?? (badly)
+    if split[-2] in ["ac", "co"]:
+        join_index = -3
+
+    return ".".join(split[join_index:])
 
 def get_zone_id(cf: 'CF.CloudFlare', zone_name: 'str') -> 'str':
     '''
