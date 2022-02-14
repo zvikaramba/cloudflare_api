@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import datetime
 import json
 import sys
 import requests
@@ -31,6 +32,51 @@ class _batch:
         self.token = token
         self.records = records
         self.force = force
+
+class RecordCache:
+    CACHE_LIFETIME = 120
+    CACHE_FILE = "/tmp/.ucr.cache.json"
+
+    def __init__(self, cache_lifetime = CACHE_LIFETIME, cache_file = CACHE_FILE):
+        '''
+        '''
+        self.cache = {}
+        self.cache_lifetime = cache_lifetime
+        self.cache_file = cache_file
+
+    class CacheObject:
+        def __init__(self, data):
+            self.data = data
+            self.timestamp = datetime.datetime.now()
+
+    def load(self):
+        '''
+        '''
+
+    def save(self):
+        '''
+        '''
+
+    def get(self, key: 'object', default_value: 'object' = None) -> 'object':
+        '''
+        '''
+        if key not in self.cache.keys():
+            return default_value
+
+        data = self.cache[key]
+        delta = datetime.datetime.now() - data.timestamp
+        if delta.total_seconds() <= self.cache_lifetime:
+            return data
+
+        self.cache.pop(key)
+        return default_value
+
+    def put(self, key: 'object', value: 'object') -> 'None':
+        '''
+        '''
+        self.cache[key] = RecordCache.CacheObject(value)
+
+CACHE = RecordCache()
 
 def get_public_address() -> 'tuple[str,str]':
     '''
@@ -122,11 +168,17 @@ def get_zones(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'list':
     ''' Get the zone identifiers
     '''
     try:
-        params = {}
-        if zone_name:
-            params['name'] = zone_name
+        zones = CACHE.get('zones')
+        if zones:
+            return zones
 
-        zones = cf.zones.get(params=params)
+        zones = cf.zones.get(params = {})
+        CACHE.put('zones', zones)
+
+        for zone in zones:
+            if zone['name'] == zone_name:
+                return zone
+
     except CF.exceptions.CloudFlareAPIError as e:
         sys.exit('/zones %d %s - api call failed' % (e, e))
     except Exception as e:
@@ -134,22 +186,28 @@ def get_zones(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'list':
 
     return zones
 
-def get_zone_name(name: 'str') -> 'str':
+def get_zone_map(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'dict':
+    ''' Get the zone identifiers
+    '''
+    ret = {}
+    for zone in get_zones(cf, zone_name):
+        ret[zone['name']] = zone
+
+    return ret
+
+def get_zone_name(cf: 'CF.CloudFlare', name: 'str') -> 'str':
     '''
     Get zone name from fully-qualified name
     '''
+    zone_map = get_zone_map(cf)
     split = name.split('.')
-    if len(split) < 2:
-        print("Invalid name {} specified".format(name), file=sys.stderr)
-        return ''
 
-    join_index = -2
+    for i in range(0, len(name)):
+        current = ".".join(split[i:])
+        if current in zone_map.keys():
+            return zone_map[current]
 
-    # handle names like .co.?? (badly)
-    if split[-2] in ["ac", "co"]:
-        join_index = -3
-
-    return ".".join(split[join_index:])
+    return ''
 
 def get_zone_id(cf: 'CF.CloudFlare', zone_name: 'str') -> 'str':
     '''
@@ -298,7 +356,7 @@ def process_records(batch: '_batch') -> 'bool':
             continue
 
         params = record['params']
-        zone_name = get_zone_name(params['name'])
+        zone_name = get_zone_name(cf, params['name'])
         zone_id = get_zone_id(cf, zone_name)
 
         force = batch.force
@@ -345,6 +403,21 @@ def read_json_file(path: 'str') -> 'object':
             print("Error: Failed to parse json", file=sys.stderr)
 
     return None
+
+def write_json_file(obj, path: 'str') -> 'bool':
+    '''
+    Unmarshall json from file
+    '''
+    with open(path, mode='wt') as file:
+        try:
+            json_str = json.dumps(obj)
+            if file.write(json_str) < len(json_str):
+                return False
+        except TypeError:
+            print("Error: Failed to create json", file=sys.stderr)
+            return False
+
+    return True 
 
 def main():
     '''
