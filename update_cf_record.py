@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import datetime
 import json
 import sys
 import requests
@@ -31,6 +32,35 @@ class _batch:
         self.token = token
         self.records = records
         self.force = force
+
+class RecordCache:
+    CACHE = {}
+    CACHE_LIFETIME = 120
+    CACHE_FILE = "/tmp/.ucr.cache.json"
+
+    class CacheObject:
+        def __init__(self, data):
+            self.data = data
+            self.timestamp = datetime.datetime.now()
+
+    def get_cache(key: 'object', default_value: 'object' = None) -> 'object':
+        '''
+        '''
+        if key not in CACHE.keys():
+            return default_value
+
+        data = CACHE[key]
+        delta = datetime.datetime.now() - data.timestamp
+        if delta.total_seconds() <= CACHE_LIFETIME:
+            return data
+
+        CACHE.pop(key)
+        return default_value
+
+    def put_cache(key: 'object', value: 'object') -> 'None':
+        '''
+        '''
+        CACHE[key] = CacheObject(value)
 
 def get_public_address() -> 'tuple[str,str]':
     '''
@@ -345,6 +375,21 @@ def read_json_file(path: 'str') -> 'object':
             print("Error: Failed to parse json", file=sys.stderr)
 
     return None
+
+def write_json_file(obj, path: 'str') -> 'bool':
+    '''
+    Unmarshall json from file
+    '''
+    with open(path, mode='wt') as file:
+        try:
+            json_str = json.dumps(obj)
+            if file.write(json_str) < len(json_str):
+                return False
+        except TypeError:
+            print("Error: Failed to create json", file=sys.stderr)
+            return False
+
+    return True 
 
 def main():
     '''
