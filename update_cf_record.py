@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+import datetime
 import json
+import os
 import sys
 import requests
 import CloudFlare as CF
@@ -31,6 +33,68 @@ class _batch:
         self.token = token
         self.records = records
         self.force = force
+
+class RecordCache:
+    class CacheObject:
+        def __init__(self, data):
+            '''
+            '''
+            self.data = data
+            self.timestamp = datetime.datetime.now().timestamp()
+
+    CACHE_LIFETIME = 120
+    CACHE_FILE = "/tmp/.ucr.cache.json"
+
+    def __init__(self, cache_lifetime = CACHE_LIFETIME, cache_file = CACHE_FILE):
+        '''
+        '''
+        self.cache = {}
+        self.cache_lifetime = cache_lifetime
+        self.cache_file = cache_file
+
+    def load(self):
+        '''
+        '''
+        if not os.path.isfile(self.cache_file):
+            return
+
+        cache_map = read_json_file(self.cache_file)
+        if cache_map:
+            self.cache = cache_map
+
+    def save(self):
+        '''
+        '''
+        if len(self.cache.keys()) == 0:
+            return
+
+        write_json_file(self.cache, self.cache_file)
+
+    def get(self, key: 'object', default_value: 'object' = None) -> 'object':
+        '''
+        '''
+        if key not in self.cache.keys():
+            return default_value
+
+        value = self.cache[key]
+        delta = datetime.datetime.now() - datetime.datetime.fromtimestamp(value.timestamp)
+        if delta.total_seconds() <= self.cache_lifetime:
+            return value.data
+
+        self.cache.pop(key)
+        return default_value
+
+    def put(self, key: 'object', value: 'object') -> 'None':
+        '''
+        '''
+        self.cache[key] = RecordCache.CacheObject(value)
+
+    def pop(self, key: 'object') -> 'object':
+        '''
+        '''
+        return self.cache.pop(key)
+
+CACHE = RecordCache()
 
 def get_public_address() -> 'tuple[str,str]':
     '''
@@ -121,12 +185,17 @@ def parse_args(args: 'list' = None) -> 'argparse.Namespace':
 def get_zones(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'list':
     ''' Get the zone identifiers
     '''
+    key = 'zones'
     try:
-        params = {}
-        if zone_name:
-            params['name'] = zone_name
+        zones = CACHE.get(key)
+        if not zones:
+            zones = cf.zones.get(params = {})
+            CACHE.put(key, zones)
 
-        zones = cf.zones.get(params=params)
+        for zone in zones:
+            if zone['name'] == zone_name:
+                return [zone]
+
     except CF.exceptions.CloudFlareAPIError as e:
         sys.exit('/zones %d %s - api call failed' % (e, e))
     except Exception as e:
@@ -134,22 +203,28 @@ def get_zones(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'list':
 
     return zones
 
-def get_zone_name(name: 'str') -> 'str':
+def get_zone_map(cf: 'CF.CloudFlare', zone_name: 'str' = None) -> 'dict':
+    ''' Get the zone identifiers
+    '''
+    ret = {}
+    for zone in get_zones(cf, zone_name):
+        ret[zone['name']] = zone
+
+    return ret
+
+def get_zone_name(cf: 'CF.CloudFlare', name: 'str') -> 'str':
     '''
     Get zone name from fully-qualified name
     '''
+    zone_map = get_zone_map(cf)
     split = name.split('.')
-    if len(split) < 2:
-        print("Invalid name {} specified".format(name), file=sys.stderr)
-        return ''
 
-    join_index = -2
+    for i in range(0, len(split)):
+        current = ".".join(split[i:])
+        if current in zone_map.keys():
+            return current
 
-    # handle names like .co.?? (badly)
-    if split[-2] in ["ac", "co"]:
-        join_index = -3
-
-    return ".".join(split[join_index:])
+    return ''
 
 def get_zone_id(cf: 'CF.CloudFlare', zone_name: 'str') -> 'str':
     '''
@@ -164,15 +239,44 @@ def get_zone_id(cf: 'CF.CloudFlare', zone_name: 'str') -> 'str':
 
     return zones[0]['id']
 
+def get_records(cf: 'CF.CloudFlare', zone_id: 'str', params: 'dict' = {}) -> 'list':
+    ''' Get the records
+    '''
+    key = zone_id + '_records'
+    try:
+        records = CACHE.get(key)
+        if not records:
+            records = cf.zones.dns_records.get(zone_id, params = {})
+            CACHE.put(key, records)
+
+        matched_records = []
+        for record in records:
+            match = True
+            for param in params.keys():
+                if params[param] != record[param]:
+                    match = False
+                    break
+
+            if match:
+                matched_records.append(record)
+
+        return matched_records
+
+    except CF.exceptions.CloudFlareAPIError as e:
+        sys.exit('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
+    except Exception as e:
+        sys.exit('/zones/dns_records - %s - api call failed' % (e))
+
+def clear_record_cache(zone_id: 'str') -> 'None':
+    ''' Clear the records from cache
+    '''
+    key = zone_id + '_records'
+    CACHE.pop(key)
+
 def delete_record(cf: 'CF.CloudFlare', zone_id: 'str', params: 'dict') -> 'bool':
     ''' Delete a dns record and return True if successful
     '''
-
-    try:
-        dns_records = cf.zones.dns_records.get(zone_id, params = params)
-    except CF.exceptions.CloudFlareAPIError as e:
-        print('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
-        return False
+    dns_records = get_records(cf, zone_id, params)
 
     ret = True
     for record in dns_records:
@@ -188,12 +292,7 @@ def delete_record(cf: 'CF.CloudFlare', zone_id: 'str', params: 'dict') -> 'bool'
 def add_update_record(cf: 'CF.CloudFlare', zone_id: 'str', params: 'dict', force: 'bool' = False) -> 'bool':
     ''' Update/create a dns record and return True if successful
     '''
-
-    try:
-        dns_records = cf.zones.dns_records.get(zone_id, params = {'name': params['name']})
-    except CF.exceptions.CloudFlareAPIError as e:
-        print('/zones/dns_records %s - %d %s - api call failed' % (params['name'], e, e), file=sys.stderr)
-        return False
+    dns_records = get_records(cf, zone_id, params = {'name': params['name']})
 
     print('Params to set: {}'.format(params), file=sys.stderr)
 
@@ -298,7 +397,7 @@ def process_records(batch: '_batch') -> 'bool':
             continue
 
         params = record['params']
-        zone_name = get_zone_name(params['name'])
+        zone_name = get_zone_name(cf, params['name'])
         zone_id = get_zone_id(cf, zone_name)
 
         force = batch.force
@@ -343,8 +442,26 @@ def read_json_file(path: 'str') -> 'object':
             print("Error: Invalid format", file=sys.stderr)
         except json.JSONDecodeError:
             print("Error: Failed to parse json", file=sys.stderr)
+        except:
+            print("Error: failed to read file " + file, file=sys.stderr)
 
     return None
+
+def write_json_file(obj, path: 'str') -> 'bool':
+    '''
+    Unmarshall json from file
+    '''
+    with open(path, mode='wt') as file:
+        try:
+            json_str = json.dumps(obj)
+            if file.write(json_str) >= len(json_str):
+                return True
+        except TypeError:
+            print("Error: Failed to create json", file=sys.stderr)
+        except:
+            print("Error: failed to write file " + file, file=sys.stderr)
+
+    return False
 
 def main():
     '''
@@ -392,16 +509,19 @@ def main():
 
         batches.append(_batch(parsed['email'], parsed['token'], [record]))
 
-
     for batch in batches:
         # run command handler
         if not process_records(batch):
             ret = False
 
-    if (ret):
+    return ret
+
+if __name__ == '__main__':
+    CACHE.load()
+    ret = main()
+    CACHE.save()
+
+    if ret:
         sys.exit(EXIT_SUCCESS)
 
     sys.exit(EXIT_FAILURE)
-
-if __name__ == '__main__':
-    main()
